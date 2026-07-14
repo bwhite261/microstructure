@@ -38,32 +38,42 @@ FEATURE_GROUPS = {
 }
 
 
-def direction_dataset(df: pd.DataFrame, horizon: int):
+def direction_dataset(df: pd.DataFrame, horizon: int, feats=FEATURES):
     """X, y for 'given the mid moves in the next h seconds, which way?'"""
+    feats = list(feats)
     target = f"fwd_ret_{horizon}s"
-    data = df.dropna(subset=FEATURES + [target])
+    data = df.dropna(subset=feats + [target])
     data = data[data[target] != 0]
-    return data[FEATURES].to_numpy(), (data[target] > 0).to_numpy()
+    return data[feats].to_numpy(), (data[target] > 0).to_numpy()
+
+
+def cv_auc(model, X, y, n_splits: int, embargo: int):
+    """Walk-forward mean AUC/accuracy with an embargo gap between train and test.
+    Returns (mean_auc, std_auc, mean_acc), or None if every fold is single-class."""
+    aucs, accs = [], []
+    for train_idx, test_idx in TimeSeriesSplit(n_splits, gap=embargo).split(X):
+        if len(np.unique(y[test_idx])) < 2:
+            continue  # degenerate fold, AUC undefined
+        model.fit(X[train_idx], y[train_idx])
+        prob = model.predict_proba(X[test_idx])[:, 1]
+        aucs.append(roc_auc_score(y[test_idx], prob))
+        accs.append(accuracy_score(y[test_idx], prob > 0.5))
+    if not aucs:
+        return None
+    return float(np.mean(aucs)), float(np.std(aucs)), float(np.mean(accs))
 
 
 def attribution(df: pd.DataFrame, symbol: str, horizon: int, embargo: int) -> None:
     """Which features carry the signal? Guards against a momentum artifact:
     if book imbalance drives AUC and the last return alone does not, the signal
     is genuine microstructure, not autocorrelation."""
-    X, y = direction_dataset(df, horizon)
-    splitter = TimeSeriesSplit(5, gap=embargo)
     print(f"{symbol} {horizon}s feature attribution:")
     for label, feats in FEATURE_GROUPS.items():
-        cols = [FEATURES.index(f) for f in feats]
-        aucs = []
-        for tr, te in splitter.split(X):
-            if len(np.unique(y[te])) < 2:
-                continue
-            model = make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000))
-            model.fit(X[tr][:, cols], y[tr])
-            aucs.append(roc_auc_score(y[te], model.predict_proba(X[te][:, cols])[:, 1]))
-        if aucs:
-            print(f"  {label:30s} AUC {np.mean(aucs):.3f}")
+        X, y = direction_dataset(df, horizon, feats)
+        scored = cv_auc(make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)),
+                        X, y, 5, embargo)
+        if scored:
+            print(f"  {label:30s} AUC {scored[0]:.3f}")
 
 
 def evaluate(df: pd.DataFrame, symbol: str, n_splits: int, embargo: int) -> list[dict]:
@@ -74,23 +84,14 @@ def evaluate(df: pd.DataFrame, symbol: str, n_splits: int, embargo: int) -> list
             print(f"{symbol} {horizon}s: only {len(y)} samples, skipping")
             continue
         print(f"{symbol} {horizon}s: n={len(y):,}, base rate {y.mean():.1%} up")
-        splitter = TimeSeriesSplit(n_splits, gap=embargo)
         for name, model in make_models().items():
-            aucs, accs = [], []
-            for train_idx, test_idx in splitter.split(X):
-                if len(np.unique(y[test_idx])) < 2:
-                    continue  # degenerate fold, AUC undefined
-                model.fit(X[train_idx], y[train_idx])
-                prob = model.predict_proba(X[test_idx])[:, 1]
-                aucs.append(roc_auc_score(y[test_idx], prob))
-                accs.append(accuracy_score(y[test_idx], prob > 0.5))
-            if not aucs:
+            scored = cv_auc(model, X, y, n_splits, embargo)
+            if scored is None:
                 continue
-            print(f"  {name:9s} AUC {np.mean(aucs):.3f} ± {np.std(aucs):.3f},  "
-                  f"acc {np.mean(accs):.1%}")
+            auc, std, acc = scored
+            print(f"  {name:9s} AUC {auc:.3f} ± {std:.3f},  acc {acc:.1%}")
             results.append({"symbol": symbol, "horizon_s": horizon, "model": name,
-                            "n": len(y), "auc_mean": np.mean(aucs), "auc_std": np.std(aucs),
-                            "acc_mean": np.mean(accs)})
+                            "n": len(y), "auc_mean": auc, "auc_std": std, "acc_mean": acc})
     return results
 
 

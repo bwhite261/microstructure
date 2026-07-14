@@ -90,6 +90,7 @@ python book.py                        # replay + validate every checksum
 python features.py                    # build 1s bars -> data/features-*.csv
 python models.py                      # embargoed walk-forward + feature attribution
 python backtest.py --horizon 5        # cost-aware PnL + equity curves
+python leadlag.py BTC/USD ETH/USD     # cross-asset lead-lag + cross-feature test
 pytest                                # book engine + feature unit tests
 ```
 
