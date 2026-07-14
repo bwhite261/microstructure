@@ -88,7 +88,7 @@ async def record(symbols: list[str], depth: int, writer: HourlyWriter) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbols", nargs="+", default=["BTC/USD", "ETH/USD"])
+    parser.add_argument("--symbols", nargs="+", default=["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD"])
     parser.add_argument("--depth", type=int, default=10, choices=[10, 25, 100, 500, 1000])
     parser.add_argument("--out", type=Path, default=Path("data"))
     args = parser.parse_args()
