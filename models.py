@@ -50,10 +50,14 @@ def direction_dataset(df: pd.DataFrame, horizon: int, feats=FEATURES):
 def cv_auc(model, X, y, n_splits: int, embargo: int):
     """Walk-forward mean AUC/accuracy with an embargo gap between train and test.
     Returns (mean_auc, std_auc, mean_acc), or None if every fold is single-class."""
+    try:
+        splits = list(TimeSeriesSplit(n_splits, gap=embargo).split(X))
+    except ValueError:
+        return None  # too few samples for this split/gap configuration
     aucs, accs = [], []
-    for train_idx, test_idx in TimeSeriesSplit(n_splits, gap=embargo).split(X):
-        if len(np.unique(y[test_idx])) < 2:
-            continue  # degenerate fold, AUC undefined
+    for train_idx, test_idx in splits:
+        if len(np.unique(y[train_idx])) < 2 or len(np.unique(y[test_idx])) < 2:
+            continue  # a single-class fold can't be trained or scored
         model.fit(X[train_idx], y[train_idx])
         prob = model.predict_proba(X[test_idx])[:, 1]
         aucs.append(roc_auc_score(y[test_idx], prob))
@@ -80,7 +84,7 @@ def evaluate(df: pd.DataFrame, symbol: str, n_splits: int, embargo: int) -> list
     results = []
     for horizon in HORIZONS:
         X, y = direction_dataset(df, horizon)
-        if len(y) < 10 * n_splits:
+        if len(y) < (n_splits + 1) * (embargo + 10):
             print(f"{symbol} {horizon}s: only {len(y)} samples, skipping")
             continue
         print(f"{symbol} {horizon}s: n={len(y):,}, base rate {y.mean():.1%} up")
@@ -109,8 +113,10 @@ def main() -> None:
     for path in paths:
         symbol = path.stem.removeprefix("features-").replace("-", "/", 1)
         df = pd.read_csv(path, index_col="ts")
-        all_results += evaluate(df, symbol, args.splits, args.embargo)
-        attribution(df, symbol, 5, args.embargo)
+        results = evaluate(df, symbol, args.splits, args.embargo)
+        all_results += results
+        if results:  # skip attribution for symbols without enough data yet
+            attribution(df, symbol, 5, args.embargo)
 
     args.out_dir.mkdir(exist_ok=True)
     pd.DataFrame(all_results).to_csv(args.out_dir / "metrics.csv", index=False)
