@@ -46,39 +46,46 @@ deltas, truncation errors, and float drift (prices are handled as `Decimal`).
 
 ## Results
 
-Numbers below are from a ~34-hour, multi-session recording (~100k one-second
-bars each for BTC and ETH); everything regenerates as the recorder accumulates
-more data. SOL and XRP were added later and are still building history.
+Numbers below are from a 105-hour recording (190k one-second bars each for BTC
+and ETH; 86k each for SOL and XRP, which were added later). Everything
+regenerates as the recorder accumulates more data — the tables below reproduced
+to within ~0.01 AUC across three runs on 34h, 79h, and 105h of data.
 
 **Direction prediction** (5s horizon, embargoed walk-forward, logistic):
 
 | symbol | AUC | book features only | imb1 alone | last return alone |
 |---|---|---|---|---|
-| BTC/USD | 0.90 | 0.90 | 0.89 | 0.55 |
-| ETH/USD | 0.59 | 0.59 | 0.58 | 0.53 |
+| BTC/USD | 0.91 | 0.91 | 0.90 | 0.55 |
+| SOL/USD | 0.64 | 0.64 | 0.64 | 0.52 |
+| ETH/USD | 0.59 | 0.60 | 0.58 | 0.53 |
+| XRP/USD | 0.53 | 0.54 | 0.54 | 0.51 |
 
 Two things to read here. First, the signal is **order-book imbalance**, not
-momentum: `imb1` alone reproduces nearly the full AUC while the last return
-alone is barely above 0.5. Second, BTC scores far higher than ETH because of
-**tick size** — BTC/USD moves in $0.10 ticks on a ~$64k price, so the mid only
-changes when a best level clears, and best-level imbalance mechanically
-telegraphs which side is about to clear. ETH's finer relative tick makes the
-relationship noisier and the AUC closer to the values reported in the
-microstructure literature.
+momentum: across all four assets `imb1` alone reproduces nearly the full AUC
+while the last return alone sits at ~0.5. Second, the AUC ordering tracks
+**tick size**. BTC/USD moves in $0.10 ticks on a ~$65k price — an extremely
+coarse grid — so its mid only changes when a best level clears, and best-level
+imbalance mechanically telegraphs which side is about to go. The finer-grained
+alts land at 0.53–0.64, in line with the microstructure literature. BTC is the
+outlier because of its price grid, not because it is more predictable in any
+useful sense.
 
-**But is it tradeable?** The three-way backtest (threshold 0.6, ~3–4k trades):
+**But is it tradeable?** The three-way backtest (5s, threshold 0.6):
 
-| scenario | BTC avg/trade | ETH avg/trade |
-|---|---|---|
-| mid-to-mid (no cost) | +0.30 bps | +0.41 bps |
-| crossing the spread | +0.27 bps | +0.27 bps |
-| + 26 bps taker fee/side | −51.7 bps | −51.7 bps |
+| scenario | BTC | ETH | SOL | XRP |
+|---|---|---|---|---|
+| mid-to-mid (no cost) | +0.26 | +0.36 | +0.25 | +0.30 |
+| crossing the spread | +0.24 | +0.20 | −1.40 | −0.17 |
+| + 26 bps taker fee/side | −51.8 | −51.8 | −53.4 | −52.2 |
+
+*(bps per trade, 1k–7.7k trades per symbol)*
 
 The high AUC and the tiny per-trade edge are consistent, and reconciling them
-is the whole point: imbalance predicts *direction* well, but the predicted
-move is a fraction of a basis point (often a single tick, and most 5s windows
-don't move at all). A retail taker pays ~52 bps round trip to capture a third
-of a basis point.
+is the whole point: imbalance predicts *direction* well, but the predicted move
+is a fraction of a basis point (often a single tick, and most 5s windows don't
+move at all). A retail taker pays ~52 bps round trip to capture a third of a
+basis point. Note the middle row: on the wider-spread alts the edge is already
+gone before fees are applied at all.
 **The signal is real and nearly mechanical; the profit is not.** Short-horizon
 edge of this kind is only harvestable by market makers who *earn* the spread
 instead of paying it — which is exactly why latency and queue position matter
@@ -86,21 +93,38 @@ in real markets.
 
 ## Cross-asset lead-lag
 
-`leadlag.py` asks whether BTC and ETH inform each other. Their 1-second returns
-have a contemporaneous correlation of ~0.38, and the cross-correlation is
-asymmetric: ETH's return tracks BTC's *next* second more than the reverse
-(−1s: +0.15, −2s: +0.10, −3s: +0.06, versus +0.07 at +1s). So over this sample
-**ETH leads BTC by a second or two** — the opposite of the usual "BTC leads
-everything" assumption.
+`leadlag.py` asks whether the four assets inform each other. Two layers.
 
-That relationship carries no predictive power, though: adding the leader's
-return, order flow, and imbalance to the follower's direction model moves AUC
-by ~0.00. Two honest reasons — BTC's own AUC is already saturated by the
-tick-size effect, so there is no headroom to add, and ETH can't be helped by a
-feature (BTC) that lags it. A real lead-lag that carries no independent edge,
-and at ~0.15 correlation it would not survive costs anyway. (At one-second
-resolution, apparent lead-lag can partly reflect which venue's feed updates
-first rather than true information flow — a caveat worth stating.)
+**They are strongly synchronized.** Contemporaneous 1-second return
+correlations run 0.70–0.83 (ETH–SOL tightest at 0.83), and *every* pair's
+cross-correlation peaks at lag 0 — one dominant market factor.
+
+**Underneath that is a faint but perfectly consistent tilt.** Comparing
+correlation at positive vs. negative lags gives the same leader in all six
+pairs, and the ordering is transitive:
+
+| pair | ρ (lag 0) | leader | lead score |
+|---|---|---|---|
+| BTC–SOL | 0.76 | SOL | 0.034 |
+| BTC–ETH | 0.73 | ETH | 0.029 |
+| BTC–XRP | 0.70 | XRP | 0.024 |
+| ETH–SOL | 0.83 | SOL | 0.014 |
+| ETH–XRP | 0.77 | XRP | 0.006 |
+| SOL–XRP | 0.75 | SOL | 0.004 |
+
+which resolves to **SOL → XRP → ETH → BTC**. BTC is the follower in all three
+of its pairs; SOL leads all three of its. Six independent pair tests agreeing
+(and reproducing across separate runs) says the tilt is real.
+
+It is also weak and almost certainly **mechanical rather than informational**.
+The scores are 0.4–3.4% asymmetries on top of a lag-0 peak, and leadership
+runs inversely to tick coarseness: BTC's discrete mid only updates when a
+level clears, so it necessarily trails assets whose mids move continuously.
+Consistent with that, cross-asset features buy nothing — adding SOL's return,
+order flow, and imbalance to BTC's direction model moves AUC by −0.000.
+A real lead-lag ordering that carries no independent edge. (At one-second
+resolution, apparent lead-lag can also reflect which feed updates first rather
+than true information flow — a caveat worth stating.)
 
 ## Run it
 
@@ -122,8 +146,8 @@ suite validates the engine against genuine exchange checksums.
 
 - Maker-side simulation with queue-position modeling (earn the spread
   instead of paying it) — requires L3 or fill data to be honest.
-- Extend the cross-asset study to SOL and XRP (now recording) for a full
-  correlation matrix and lead-lag hierarchy.
+- Isolate the tick-size effect directly: re-run the labels on moves of at
+  least N ticks, and check whether BTC's AUC collapses toward the alts'.
 - Deeper features: multi-level OFI and trade-size distributions.
 - A C++ book engine for line-rate throughput.
 
